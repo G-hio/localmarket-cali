@@ -1,0 +1,17 @@
+{
+  "name": "LocalMarket Cali",
+  "short_name": "LocalMarket",
+  "description": "Tienda local de Valle del Lili",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#f97316",
+  "icons": [
+    {
+      "src": "/logo.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
