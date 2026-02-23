@@ -74,7 +74,14 @@ export default function PaginaCliente() {
         {productosFiltrados.map((item) => (
           <div key={item.id} className="bg-white p-4 rounded-3xl shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] border-2 border-black flex justify-between items-center">
             <div className="flex-1">
-              <span className="text-[10px] font-black text-orange-600 uppercase tracking-widest">{item.categoria}</span>
+              <span className={`text-[10px] font-black uppercase px-2 py-0.5 rounded-full border shadow-sm ${
+                item.categoria === 'Panadería' ? 'bg-orange-100 text-orange-700 border-orange-400' :
+                  item.categoria === 'Lácteos' ? 'bg-blue-100 text-blue-700 border-blue-400' :
+                    item.categoria === 'Frutas/Verduras' ? 'bg-green-100 text-green-700 border-green-400' :
+                      item.categoria === 'Aseo' ? 'bg-purple-100 text-purple-700 border-purple-400' :
+                        'bg-gray-100 text-gray-700 border-gray-400'
+                }`}>
+              {item.categoria} </span>
               <h3 className="font-black text-black text-xl uppercase leading-none mb-2 mt-1">{item.nombre}</h3>
               <p className="text-black font-black text-2xl">${item.precio}</p>
             </div>
