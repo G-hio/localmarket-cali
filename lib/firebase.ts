@@ -1,6 +1,7 @@
-// En tu archivo lib/firebase.ts o app/lib/firebase.ts
+// lib/firebase.ts
 import { initializeApp } from "firebase/app";
 import { getFirestore } from "firebase/firestore";
+import { getAuth } from "firebase/auth"; // Añade esto para el Login
 
 const firebaseConfig = {
   apiKey: "AIzaSyAzJV22i_9QXI4BK8vvz2zlj2EDfqXCkyg",
@@ -13,5 +14,5 @@ const firebaseConfig = {
 
 // Inicializamos la conexión
 const app = initializeApp(firebaseConfig);
-export const db = getFirestore(app);
-
+export const db = getFirestore(app); // Para los productos 
+export const auth = getAuth(app);    // Para el Login del tendero

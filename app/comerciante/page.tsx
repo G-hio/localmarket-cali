@@ -1,91 +1,187 @@
-'use client'; 
-import React, { useState, useEffect } from 'react';
-import { db } from '@/lib/firebase'; 
-import { collection, addDoc, onSnapshot, query, deleteDoc, doc } from 'firebase/firestore'; 
-import { Trash2, PlusCircle, Store, ArrowLeft, Tag } from 'lucide-react';
-import Link from 'next/link';
+"use client";
 
-export default function PaginaComerciante() {
-  const [nombre, setNombre] = useState('');
-  const [precio, setPrecio] = useState('');
-  const [categoria, setCategoria] = useState('Varios'); // Nueva categoría por defecto
-  const [misProductos, setMisProductos] = useState<any[]>([]);
+import { useEffect, useState } from "react";
+import { db } from "@/lib/firebase";
+import { collection, onSnapshot, doc, updateDoc, increment, query, where, getDocs } from "firebase/firestore";
+import { ShoppingBag, MessageCircle, Search, Flame, Store, Tag, Info } from "lucide-react";
+
+export default function VitrinaCliente() {
+  const [productos, setProductos] = useState<any[]>([]);
+  const [categorias, setCategorias] = useState<string[]>([]);
+  const [tiendasBloqueadas, setTiendasBloqueadas] = useState<string[]>([]);
+  const [busqueda, setBusqueda] = useState("");
+  const [filtroCat, setFiltroCat] = useState("TODOS");
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const q = query(collection(db, "productos"));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const docs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      setMisProductos(docs);
+    // 1. Escuchar Categorías Dinámicas
+    const unsubCats = onSnapshot(doc(db, "configuracion", "categorias"), (doc) => {
+      if (doc.exists()) setCategorias(doc.data().lista);
     });
-    return () => unsubscribe();
+
+    // 2. Identificar Tiendas Bloqueadas para no mostrarlas
+    const unsubTiendas = onSnapshot(collection(db, "tiendas"), (snapshot) => {
+      const bloqueadas = snapshot.docs
+        .filter(d => d.data().bloqueada === true)
+        .map(d => d.data().nombreNegocio);
+      setTiendasBloqueadas(bloqueadas);
+    });
+
+    // 3. Escuchar Productos en tiempo real
+    const unsubProds = onSnapshot(collection(db, "productos"), (snapshot) => {
+      const docs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      setProductos(docs);
+      setLoading(false);
+    });
+
+    return () => { unsubCats(); unsubTiendas(); unsubProds(); };
   }, []);
 
-  const guardarProducto = async () => {
-    if (!nombre || !precio) return alert("Llena todos los campos");
-    try {
-      await addDoc(collection(db, "productos"), {
-        nombre,
-        precio: Number(precio),
-        categoria, // Guardamos la categoría
-        fecha: new Date()
-      });
-      setNombre(''); setPrecio('');
-    } catch (e) { alert("Error al guardar"); }
+  const registrarClic = async (id: string, whatsapp: string, nombreProd: string) => {
+    // Incrementa el contador de clics en Firebase
+    await updateDoc(doc(db, "productos", id), {
+      clics: increment(1)
+    });
+    
+    // Abrir WhatsApp
+    const mensaje = `Hola! Vi el producto "${nombreProd}" en LocalMarket Cali y me interesa.`;
+    window.open(`https://wa.me/${whatsapp}?text=${encodeURIComponent(mensaje)}`, '_blank');
   };
 
-  const eliminarProducto = async (id: string) => {
-    if(confirm("¿Eliminar este producto?")) {
-      await deleteDoc(doc(db, "productos", id));
-    }
-  };
+  const prodsVisibles = productos.filter(p => {
+    const coincideBusqueda = p.nombre.toLowerCase().includes(busqueda.toLowerCase()) || 
+                             p.nombreTienda.toLowerCase().includes(busqueda.toLowerCase());
+    const coincideCat = filtroCat === "TODOS" || p.categoria === filtroCat;
+    const noEstaBloqueada = !tiendasBloqueadas.includes(p.nombreTienda);
+    
+    return coincideBusqueda && coincideCat && noEstaBloqueada;
+  });
 
-  return (
-    <div className="p-6 max-w-md mx-auto font-sans bg-gray-100 min-h-screen border-x-2 border-black">
-      <div className="flex items-center gap-3 mb-6">
-        <Link href="/"><ArrowLeft className="text-black" /></Link>
-        <h1 className="text-2xl font-black text-black uppercase">MI TIENDA</h1>
-      </div>
-
-      <div className="bg-white p-6 rounded-3xl shadow-xl mb-8 border-2 border-black">
-        <label className="block text-black font-black text-sm mb-1 uppercase">Producto</label>
-        <input value={nombre} onChange={(e) => setNombre(e.target.value)} className="w-full p-3 mb-4 border-2 border-gray-300 rounded-xl text-black font-bold" />
-        
-        <label className="block text-black font-black text-sm mb-1 uppercase">Precio</label>
-        <input type="number" value={precio} onChange={(e) => setPrecio(e.target.value)} className="w-full p-3 mb-4 border-2 border-gray-300 rounded-xl text-black font-bold" />
-
-        <label className="block text-black font-black text-sm mb-1 uppercase">Categoría</label>
-        <select 
-          value={categoria} 
-          onChange={(e) => setCategoria(e.target.value)}
-          className="w-full p-3 mb-6 border-2 border-gray-300 rounded-xl text-black font-bold bg-white"
-        >
-          <option value="Varios">Varios</option>
-          <option value="Panadería">Panadería</option>
-          <option value="Lácteos">Lácteos</option>
-          <option value="Frutas/Verduras">Frutas/Verduras</option>
-          <option value="Aseo">Aseo</option>
-        </select>
-
-        <button onClick={guardarProducto} className="w-full bg-black text-white p-4 rounded-2xl font-black text-lg flex items-center justify-center gap-3">
-          <PlusCircle size={24} /> SUBIR AL MAPA
-        </button>
-      </div>
-
-      <div className="space-y-4">
-        <h2 className="text-black font-black text-lg uppercase border-b-2 border-black pb-2">Inventario</h2>
-        {misProductos.map((item) => (
-          <div key={item.id} className="bg-white p-4 rounded-2xl flex justify-between items-center border-2 border-gray-200">
-            <div>
-              <p className="font-black text-black uppercase">{item.nombre}</p>
-              <p className="text-green-700 font-black text-lg">${item.precio}</p>
-              <span className="text-[10px] bg-gray-200 px-2 py-0.5 rounded font-bold text-black uppercase">{item.categoria}</span>
-            </div>
-            <button onClick={() => eliminarProducto(item.id)} className="bg-red-100 text-red-600 p-3 rounded-xl">
-              <Trash2 size={24} />
-            </button>
-          </div>
-        ))}
+  if (loading) return (
+    <div className="min-h-screen flex items-center justify-center bg-white">
+      <div className="text-center">
+        <div className="w-16 h-16 border-8 border-black border-t-orange-500 rounded-full animate-spin mb-4"></div>
+        <p className="font-black uppercase tracking-widest italic">Abriendo la Vitrina...</p>
       </div>
     </div>
+  );
+
+  return (
+    <div className="min-h-screen bg-white font-sans text-black pb-20">
+      
+      {/* HEADER TIPO REVISTA */}
+      <header className="p-6 border-b-4 border-black sticky top-0 bg-white z-50">
+        <div className="max-w-6xl mx-auto flex flex-col md:flex-row justify-between items-center gap-4">
+          <div>
+            <h1 className="text-5xl font-black uppercase italic tracking-tighter leading-none">
+              LOCAL MARKET <span className="text-orange-600">CALI</span>
+            </h1>
+            <p className="font-bold text-[10px] uppercase tracking-[0.3em] mt-1">Directo del barrio a tu casa</p>
+          </div>
+          
+          <div className="relative w-full md:w-80">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
+            <input 
+              type="text"
+              placeholder="¿QUÉ BUSCAS HOY?"
+              value={busqueda}
+              onChange={(e) => setBusqueda(e.target.value)}
+              className="w-full pl-10 pr-4 py-3 border-4 border-black font-black uppercase text-xs outline-none shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] focus:translate-x-1 focus:translate-y-1 focus:shadow-none transition-all"
+            />
+          </div>
+        </div>
+      </header>
+
+      {/* BARRA DE CATEGORÍAS */}
+      <div className="bg-black p-3 overflow-x-auto whitespace-nowrap scrollbar-hide">
+        <div className="max-w-6xl mx-auto flex gap-4 px-4">
+          <button 
+            onClick={() => setFiltroCat("TODOS")}
+            className={`px-4 py-1 font-black text-[10px] uppercase border-2 ${filtroCat === 'TODOS' ? 'bg-orange-500 border-white text-white' : 'bg-transparent border-gray-700 text-gray-400'}`}
+          >
+            TODO EL BARRIO
+          </button>
+          {categorias.map(cat => (
+            <button 
+              key={cat}
+              onClick={() => setFiltroCat(cat)}
+              className={`px-4 py-1 font-black text-[10px] uppercase border-2 ${filtroCat === cat ? 'bg-orange-500 border-white text-white' : 'bg-transparent border-gray-700 text-gray-400'}`}
+            >
+              {cat}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* GRILLA DE PRODUCTOS */}
+      <main className="max-w-6xl mx-auto p-6 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-8">
+        {prodsVisibles.map((prod) => (
+          <div 
+            key={prod.id} 
+            className={`relative group bg-white border-4 border-black p-5 shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] transition-all ${prod.agotado ? 'opacity-60 grayscale' : 'hover:-translate-y-2'}`}
+          >
+            {/* TAG DE OFERTA */}
+            {prod.oferta && (
+              <div className="absolute -top-4 -right-2 bg-orange-600 text-white font-black px-3 py-1 border-2 border-black rotate-12 flex items-center gap-1 text-xs">
+                <Flame size={14} fill="white" /> OFERTA
+              </div>
+            )}
+
+            {/* INFO TIENDA */}
+            <div className="flex items-center gap-2 mb-3">
+              <div className="bg-black text-white p-1"><Store size={14}/></div>
+              <span className="text-[10px] font-black uppercase tracking-widest truncate">{prod.nombreTienda}</span>
+            </div>
+
+            {/* NOMBRE Y PRECIO */}
+            <h2 className="text-2xl font-black uppercase italic leading-tight mb-1">{prod.nombre}</h2>
+            <div className="flex items-baseline gap-2 mb-4">
+              <p className="text-3xl font-black text-black">${Number(prod.precio).toLocaleString()}</p>
+              <span className="text-[10px] font-bold text-gray-400 uppercase italic">/ Unidad</span>
+            </div>
+
+            {/* BOTÓN WHATSAPP */}
+            <button 
+              disabled={prod.agotado}
+              onClick={() => registrarClic(prod.id, prod.whatsapp, prod.nombre)}
+              className={`w-full py-4 border-2 border-black font-black uppercase text-sm flex items-center justify-center gap-3 transition-all ${prod.agotado ? 'bg-gray-200 cursor-not-allowed' : 'bg-green-400 hover:bg-black hover:text-white shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:shadow-none'}`}
+            >
+              {prod.agotado ? (
+                <> <PackageX size={20}/> AGOTADO </>
+              ) : (
+                <> <MessageCircle size={20}/> PEDIR POR WHATSAPP </>
+              )}
+            </button>
+            
+            <div className="mt-4 flex justify-between items-center opacity-40">
+              <span className="text-[9px] font-black uppercase"><Tag size={10} className="inline mr-1"/> {prod.categoria}</span>
+              {prod.clics > 0 && <span className="text-[9px] font-black">{prod.clics} INTERESADOS</span>}
+            </div>
+          </div>
+        ))}
+      </main>
+
+      {/* MENSAJE SI NO HAY NADA */}
+      {prodsVisibles.length === 0 && (
+        <div className="py-20 text-center">
+          <Info size={48} className="mx-auto mb-4 text-gray-300" />
+          <p className="font-black uppercase italic text-gray-400">No encontramos productos en esta categoría por ahora.</p>
+        </div>
+      )}
+
+      {/* BARRA INFERIOR / FOOTER */}
+      <footer className="fixed bottom-0 left-0 right-0 bg-white border-t-4 border-black p-4 text-center z-50">
+        <p className="text-[10px] font-black uppercase italic">LocalMarket Cali v2.0 - Apoyando la economía del barrio</p>
+      </footer>
+    </div>
+  );
+}
+
+// Icono extra que faltaba
+function PackageX({ size }: { size: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M21 8V21H3V8" /><path d="M1 3H23V8H1V3Z" /><path d="M10 12L14 16" /><path d="M14 12L10 16" />
+    </svg>
   );
 }
