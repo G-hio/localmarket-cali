@@ -2,6 +2,7 @@
 import { initializeApp } from "firebase/app";
 import { getFirestore } from "firebase/firestore";
 import { getAuth } from "firebase/auth"; // Añade esto para el Login
+import { getStorage } from "firebase/storage";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAzJV22i_9QXI4BK8vvz2zlj2EDfqXCkyg",
@@ -14,5 +15,6 @@ const firebaseConfig = {
 
 // Inicializamos la conexión
 const app = initializeApp(firebaseConfig);
+export const storage = getStorage(app);
 export const db = getFirestore(app); // Para los productos 
 export const auth = getAuth(app);    // Para el Login del tendero
