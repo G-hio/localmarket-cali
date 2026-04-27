@@ -50,8 +50,8 @@ export default function Home() {
 
       {/* Acceso Rápido Admin (Opcional para pruebas) */}
       <div className="mt-12 opacity-30 hover:opacity-100 transition-opacity">
-         <Link href="/login" className="flex items-center gap-2 text-[10px] font-black uppercase text-gray-400">
-            <ShieldCheck size={12}/> Acceso Administrativo
+         <Link href="/admin-login" className="flex items-center gap-2 text-[10px] font-black uppercase text-gray-400">
+            <ShieldCheck size={12}/> Acceso de Administrador
          </Link>
       </div>
 

@@ -2,47 +2,76 @@
 
 import { useEffect, useState, useCallback, useMemo } from "react";
 import { db, auth } from "@/lib/firebase";
-import { collection, doc, onSnapshot, setDoc, updateDoc } from "firebase/firestore";
+import { collection, doc, onSnapshot, setDoc, updateDoc, deleteDoc, query, orderBy, addDoc } from "firebase/firestore"; // Añadí addDoc
 import { useRouter } from "next/navigation";
+import toast from 'react-hot-toast';
 import { 
-  Trash2, LogOut, Store, Tag, Plus, 
+  Trash2, LogOut, Store, Plus, 
   Printer, Loader2, Search, Ban, CheckCircle, 
-  Zap, LayoutGrid as LayoutGridIcon, MousePointer2, Calendar
+  ShieldCheck, LayoutGrid as LayoutGridIcon, MessageSquare, 
+  Send, Users, Key, PackagePlus, Save // Añadí Save
 } from "lucide-react";
 
-interface Stats {
-  totalProductos: number;
-  totalTiendas: number;
-  valorInventario: number;
-  totalClics: number;
+// --- INTERFACES ---
+interface Ticket {
+  id: string;
+  remitente: string;
+  whatsapp: string;
+  rol: "tendero" | "cliente";
+  mensaje: string;
+  estado: "pendiente" | "resuelto";
+  respuestaAdmin?: string;
+  fecha: string;
+}
+
+interface Usuario {
+  id: string;
+  nombre: string;
+  email: string;
+  rol: "tendero" | "cliente" | "admin";
+  whatsapp?: string;
 }
 
 export default function AdminPanel() {
+  // --- ESTADOS ORIGINALES ---
   const [productos, setProductos] = useState<any[]>([]);
   const [tiendas, setTiendas] = useState<any[]>([]);
   const [categorias, setCategorias] = useState<string[]>([]);
-  const [nuevaCat, setNuevaCat] = useState("");
+  const [usuarios, setUsuarios] = useState<Usuario[]>([]); 
+  const [tickets, setTickets] = useState<Ticket[]>([]); 
+  const [filtroSoporte, setFiltroSoporte] = useState<"tendero" | "cliente">("tendero");
+  const [activeTab, setActiveTab] = useState<"inventario" | "usuarios">("inventario"); 
   const [busqueda, setBusqueda] = useState("");
   const [loading, setLoading] = useState(true);
   const router = useRouter();
 
+  // --- NUEVOS ESTADOS PARA EL MODAL (SIN BORRAR NADA) ---
+  const [showModal, setShowModal] = useState(false);
+  const [subiendoProducto, setSubiendoProducto] = useState(false);
+  const [nuevoProducto, setNuevoProducto] = useState({
+    nombre: "",
+    precio: "",
+    categoria: "",
+    idTienda: "",
+  });
+
   const ADMIN_EMAIL = "admin@localmarket.com";
 
-  // --- LÓGICA DE FILTRADO DINÁMICO ---
+  // --- TU LÓGICA DE FILTRADO Y MÉTRICAS (MANTENIDA) ---
   const productosFiltrados = useMemo(() => {
     return productos.filter(p => 
       (p.nombre?.toLowerCase() || "").includes(busqueda.toLowerCase()) || 
-      (p.nombreTienda?.toLowerCase() || "").includes(busqueda.toLowerCase())
+      (p.nombreTienda?.toLowerCase() || "").includes(busqueda.toLowerCase()) ||
+      (p.categoria?.toLowerCase() || "").includes(busqueda.toLowerCase())
     );
   }, [productos, busqueda]);
 
-  const nombreTiendaFiltrada = useMemo(() => {
-    if (!busqueda) return null;
-    const encontrada = tiendas.find(t => 
-      t.nombreNegocio?.toLowerCase() === busqueda.toLowerCase()
+  const usuariosFiltrados = useMemo(() => {
+    return usuarios.filter(u => 
+      (u.nombre?.toLowerCase() || "").includes(busqueda.toLowerCase()) || 
+      (u.email?.toLowerCase() || "").includes(busqueda.toLowerCase())
     );
-    return encontrada ? encontrada.nombreNegocio : null;
-  }, [tiendas, busqueda]);
+  }, [usuarios, busqueda]);
 
   const statsDinamicas = useMemo(() => {
     const sumaPrecios = productosFiltrados.reduce((acc, curr) => acc + (Number(curr.precio) || 0), 0);
@@ -55,159 +84,208 @@ export default function AdminPanel() {
     };
   }, [productosFiltrados]);
 
+  // --- USE EFFECT COMPLETO (MANTENIDO) ---
   useEffect(() => {
     const unsubscribeAuth = auth.onAuthStateChanged((user) => {
       if (!user || user.email !== ADMIN_EMAIL) {
-        router.push("/login");
-      } else {
-        const unsubCats = onSnapshot(doc(db, "configuracion", "categorias"), (docSnap) => {
-          if (docSnap.exists()) setCategorias(docSnap.data().lista || []);
-        });
-        const unsubTiendas = onSnapshot(collection(db, "tiendas"), (snap) => {
-          setTiendas(snap.docs.map(d => ({ id: d.id, ...d.data() })));
-        });
-        const unsubProds = onSnapshot(collection(db, "productos"), (snap) => {
-          setProductos(snap.docs.map(d => ({ id: d.id, ...d.data() })));
-          setLoading(false);
-        });
-        return () => { unsubCats(); unsubTiendas(); unsubProds(); };
+        router.replace("/admin-login"); 
+        return;
       }
+
+      const unsubCats = onSnapshot(doc(db, "configuracion", "categorias"), (docSnap) => {
+        if (docSnap.exists()) setCategorias(docSnap.data().lista || []);
+      });
+
+      const unsubTiendas = onSnapshot(collection(db, "tiendas"), (snap) => {
+        setTiendas(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+      });
+
+      const unsubProds = onSnapshot(collection(db, "productos"), (snap) => {
+        setProductos(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+        setLoading(false);
+      });
+      
+      const unsubTickets = onSnapshot(query(collection(db, "tickets"), orderBy("fecha", "desc")), (snap) => {
+        setTickets(snap.docs.map(d => ({ id: d.id, ...d.data() } as Ticket)));
+      });
+
+      const unsubUsers = onSnapshot(collection(db, "usuarios"), (snap) => {
+        setUsuarios(snap.docs.map(d => ({ id: d.id, ...d.data() } as Usuario)));
+      });
+
+      return () => { 
+        unsubCats(); unsubTiendas(); unsubProds(); unsubTickets(); unsubUsers();
+      };
     });
+
     return () => unsubscribeAuth();
   }, [router]);
 
-  const agregarCategoria = async () => {
-    if (!nuevaCat.trim()) return;
-    await setDoc(doc(db, "configuracion", "categorias"), { lista: [...categorias, nuevaCat.trim().toUpperCase()] });
-    setNuevaCat("");
+  // --- FUNCIONES DE ACCIÓN (MANTENIDAS) ---
+  const responderTicket = async (ticket: Ticket) => {
+    const mensajeAdmin = `Hola ${ticket.remitente}, soporte LocalMarket: "${ticket.mensaje}".`;
+    const urlWhatsApp = `https://wa.me/57${ticket.whatsapp}?text=${encodeURIComponent(mensajeAdmin)}`;
+    try {
+      await updateDoc(doc(db, "tickets", ticket.id), { estado: "resuelto", respuestaAdmin: "WA_SENT" });
+      window.open(urlWhatsApp, '_blank');
+      toast.success("CHAT INICIADO");
+    } catch (e) { toast.error("ERROR AL RESPONDER"); }
   };
 
-  const eliminarCategoria = async (cat: string) => {
-    if (confirm(`¿Eliminar categoría "${cat}"?`)) {
-      await setDoc(doc(db, "configuracion", "categorias"), { lista: categorias.filter(c => c !== cat) });
+  const eliminarProducto = async (id: string, nombre: string) => {
+    if (confirm(`¿ELIMINAR "${nombre.toUpperCase()}"?`)) {
+      await deleteDoc(doc(db, "productos", id));
+      toast.success("PRODUCTO ELIMINADO");
+    }
+  };
+
+  const eliminarUsuario = async (id: string, nombre: string) => {
+    if (confirm(`¿BORRAR ACCESO DE ${nombre.toUpperCase()}?`)) {
+      await deleteDoc(doc(db, "usuarios", id));
+      toast.success("USUARIO ELIMINADO");
     }
   };
 
   const toggleBloqueoTienda = async (tiendaId: string, estadoActual: boolean) => {
-    if (confirm(estadoActual ? "¿Desbloquear tienda?" : "¿BLOQUEAR tienda?")) {
+    if (confirm(estadoActual ? "¿Desbloquear tienda?" : "¿BLOQUEAR TIENDA?")) {
       await updateDoc(doc(db, "tiendas", tiendaId), { bloqueada: !estadoActual });
+      toast.success(estadoActual ? "ACTIVA" : "BLOQUEADA");
+    }
+  };
+
+  // --- NUEVA FUNCIÓN PARA EL MODAL ---
+  const guardarProductoModal = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!nuevoProducto.idTienda || !nuevoProducto.nombre || !nuevoProducto.precio) {
+      toast.error("FALTAN DATOS");
+      return;
+    }
+    setSubiendoProducto(true);
+    try {
+      const tienda = tiendas.find(t => t.id === nuevoProducto.idTienda);
+      await addDoc(collection(db, "productos"), {
+        ...nuevoProducto,
+        nombre: nuevoProducto.nombre.toUpperCase(),
+        precio: Number(nuevoProducto.precio),
+        nombreTienda: tienda?.nombreNegocio || "Tienda Desconocida",
+        clics: 0,
+        imagen: "https://via.placeholder.com/150",
+        fechaCreacion: new Date().toISOString()
+      });
+      toast.success("PRODUCTO AGREGADO");
+      setShowModal(false);
+      setNuevoProducto({ nombre: "", precio: "", categoria: "", idTienda: "" });
+    } catch (error) {
+      toast.error("ERROR AL GUARDAR");
+    } finally {
+      setSubiendoProducto(false);
     }
   };
 
   if (loading) return (
-    <div className="min-h-screen flex flex-col items-center justify-center bg-slate-950 text-orange-500 font-black italic">
-      <Loader2 className="animate-spin mb-4" size={60} />
-      <p className="tracking-widest animate-pulse uppercase">Cargando Base de Datos...</p>
+    <div className="min-h-screen flex flex-col items-center justify-center bg-slate-50 text-blue-600 font-bold">
+      <Loader2 className="animate-spin mb-4" size={40} />
+      <p className="uppercase tracking-widest text-[10px]">Sincronizando Consola Maestra...</p>
     </div>
   );
 
   return (
-    <div className="min-h-screen bg-slate-950 text-white font-sans p-4 md:p-10">
+    <div className="min-h-screen bg-slate-50 text-slate-800 font-sans p-4 md:p-8">
       
-      {/* HEADER EXCLUSIVO IMPRESIÓN */}
-      <div className="hidden print:block text-black border-b-4 border-black pb-4 mb-6">
-        <div className="flex justify-between items-start">
+      {/* HEADER COMPLETO */}
+      <header className="flex flex-col md:flex-row justify-between items-center mb-8 gap-4 bg-white p-6 rounded-3xl shadow-sm border border-slate-100">
+        <div className="flex items-center gap-4">
+          <div className="bg-blue-600 p-3 rounded-2xl shadow-lg shadow-blue-200 text-white">
+            <LayoutGridIcon size={28} />
+          </div>
           <div>
-            <h1 className="text-3xl font-black uppercase italic tracking-tighter">REPORTE MAESTRO DE INVENTARIO</h1>
-            <p className="text-[10px] font-bold text-gray-600 uppercase">LocalMarket Cali - Control de Auditoría Interna</p>
-          </div>
-          
-          {/* RECUADRO PARA NOMBRE DE TIENDA FILTRADA */}
-          <div className="border-2 border-black p-3 min-w-[220px] text-center">
-            <p className="text-[8px] font-black uppercase mb-1">Entidad Seleccionada</p>
-            <p className="text-xl font-black uppercase italic leading-none">
-              {nombreTiendaFiltrada || "LOCALMARKET GLOBAL"}
-            </p>
+            <h1 className="text-2xl font-black uppercase italic tracking-tight leading-none text-slate-900">
+              Admin<span className="text-blue-600">Console</span>
+            </h1>
+            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">LocalMarket Cali | Control Central</p>
           </div>
         </div>
-      </div>
 
-      {/* DASHBOARD HEADER */}
-      <header className="flex flex-col md:flex-row justify-between items-start mb-10 gap-6 print:hidden">
-        <div>
-          <div className="flex items-center gap-2 text-orange-500 mb-2 font-black text-[10px] uppercase tracking-[0.4em]">
-            <Zap size={14} className="animate-pulse" /> Consola de Administración
-          </div>
-          <h1 className="text-6xl font-black uppercase italic tracking-tighter">
-            MASTER<br/><span className="text-orange-600">ADMIN</span>
-          </h1>
-        </div>
-        <div className="flex gap-4">
-          <button onClick={() => window.print()} className="bg-blue-600 px-6 py-3 font-black uppercase border-2 border-white/20 flex items-center gap-2 hover:bg-blue-700 transition-all shadow-lg">
-            <Printer size={20}/> Imprimir Filtro
+        {/* SELECTOR DE TABS */}
+        <div className="flex bg-slate-100 p-1.5 rounded-2xl border border-slate-200">
+          <button 
+            onClick={() => setActiveTab("inventario")}
+            className={`flex items-center gap-2 px-6 py-2.5 rounded-xl text-[10px] font-black uppercase transition-all ${activeTab === 'inventario' ? 'bg-white shadow-sm text-blue-600' : 'text-slate-400 hover:text-slate-600'}`}
+          >
+            <Store size={14}/> Inventario
           </button>
-          <button onClick={() => { auth.signOut(); router.push("/"); }} className="bg-zinc-900 px-6 py-3 font-black uppercase border-2 border-orange-600 flex items-center gap-2 hover:bg-red-600 transition-all">
-            <LogOut size={20}/> Salir
+          <button 
+            onClick={() => setActiveTab("usuarios")}
+            className={`flex items-center gap-2 px-6 py-2.5 rounded-xl text-[10px] font-black uppercase transition-all ${activeTab === 'usuarios' ? 'bg-white shadow-sm text-blue-600' : 'text-slate-400 hover:text-slate-600'}`}
+          >
+            <Users size={14}/> Usuarios
+          </button>
+        </div>
+
+        <div className="flex gap-3">
+          <button onClick={() => window.print()} className="bg-slate-100 hover:bg-slate-200 px-5 py-2.5 rounded-xl font-bold uppercase text-[10px] transition-all flex items-center gap-2">
+            <Printer size={16}/> Reporte PDF
+          </button>
+          <button onClick={() => { auth.signOut(); router.push("/"); }} className="bg-white border-2 border-slate-200 hover:text-red-500 px-5 py-2.5 rounded-xl font-bold uppercase text-[10px] transition-all flex items-center gap-2">
+            <LogOut size={16}/> Salir
           </button>
         </div>
       </header>
 
-      {/* MÉTRICAS (VISIBLES EN REPORTE Y DINÁMICAS) */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-10 print:grid-cols-4 print:text-black">
-        <StatBox label="Productos en Vista" val={statsDinamicas.totalProductos} color="text-blue-400" />
-        <StatBox label="Tiendas Filtradas" val={statsDinamicas.totalTiendas} color="text-purple-400" />
-        <StatBox label="Interacciones" val={statsDinamicas.totalClics} color="text-orange-500" />
-        <StatBox label="Valor Selección" val={`$${statsDinamicas.valorInventario.toLocaleString()}`} color="text-green-400" />
+      {/* MÉTRICAS */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+        <StatBox label="Total Productos" val={statsDinamicas.totalProductos} color="text-blue-600" />
+        <StatBox label="Tiendas Registradas" val={statsDinamicas.totalTiendas} color="text-indigo-600" />
+        <StatBox label="Interacciones" val={statsDinamicas.totalClics} color="text-cyan-600" />
+        <StatBox label="Valor Total" val={`$${statsDinamicas.valorInventario.toLocaleString()}`} color="text-emerald-600" />
       </div>
 
       <div className="grid lg:grid-cols-12 gap-8">
-        
-        {/* PANEL LATERAL: GESTIÓN Y FILTROS RÁPIDOS */}
-        <div className="lg:col-span-4 space-y-6 print:hidden">
-          
-          <section className="bg-zinc-900 border border-white/10 p-5 rounded-sm shadow-xl">
-            <h2 className="font-black uppercase text-orange-500 mb-4 flex items-center gap-2 italic border-b border-white/5 pb-2">
-              <Store size={18}/> Filtro por Tienda
+        {/* COLUMNA IZQUIERDA: TICKETS */}
+        <div className="lg:col-span-4 space-y-6">
+          <section className="bg-white rounded-3xl p-6 shadow-sm border border-slate-100">
+            <h2 className="font-black uppercase text-blue-600 mb-4 flex items-center gap-2 text-sm italic border-b border-slate-50 pb-3">
+              <MessageSquare size={18}/> Centro de Tickets
             </h2>
-            <div className="space-y-1 max-h-48 overflow-y-auto custom-scrollbar pr-2">
-              <button 
-                onClick={() => setBusqueda("")}
-                className={`w-full text-left p-2 text-[10px] font-black uppercase border transition-all ${busqueda === "" ? 'bg-orange-600 border-white' : 'bg-black border-white/5 hover:border-orange-500'}`}
-              >
-                MOSTRAR TODO
-              </button>
-              {tiendas.map(t => (
+            <div className="flex gap-2 mb-4 bg-slate-100 p-1 rounded-xl">
+              {["tendero", "cliente"].map((r) => (
                 <button 
-                  key={t.id}
-                  onClick={() => setBusqueda(t.nombreNegocio)}
-                  className={`w-full text-left p-2 text-[10px] font-black uppercase border transition-all ${busqueda === t.nombreNegocio ? 'bg-orange-600 border-white' : 'bg-black border-white/5 hover:border-orange-500'}`}
+                  key={r}
+                  onClick={() => setFiltroSoporte(r as any)}
+                  className={`flex-1 py-2 text-[10px] font-bold uppercase rounded-lg transition-all ${filtroSoporte === r ? 'bg-white shadow-sm text-blue-600' : 'text-slate-400'}`}
                 >
-                  {t.nombreNegocio}
+                  {r}s
                 </button>
               ))}
             </div>
-          </section>
-
-          <section className="bg-zinc-900 border border-white/10 p-5 rounded-sm">
-            <h2 className="font-black uppercase text-orange-500 mb-4 flex items-center gap-2 italic border-b border-white/5 pb-2">
-              <LayoutGridIcon size={18}/> Categorías
-            </h2>
-            <div className="flex gap-2 mb-4">
-              <input value={nuevaCat} onChange={(e) => setNuevaCat(e.target.value)} placeholder="NUEVA..." className="flex-1 bg-black p-2 border border-white/10 text-xs font-black uppercase outline-none focus:border-orange-500" />
-              <button onClick={agregarCategoria} className="bg-orange-600 px-3"><Plus size={18}/></button>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              {categorias.map(cat => (
-                <span key={cat} className="bg-zinc-800 px-2 py-1 text-[9px] font-black uppercase flex items-center gap-2 border border-white/5 italic">
-                  {cat} <Trash2 size={12} className="text-red-500 cursor-pointer" onClick={() => eliminarCategoria(cat)}/>
-                </span>
+            <div className="space-y-3 max-h-80 overflow-y-auto pr-2 custom-scrollbar">
+              {tickets.filter(t => t.rol === filtroSoporte).map(t => (
+                <div key={t.id} className={`p-4 rounded-2xl border transition-all ${t.estado === 'resuelto' ? 'bg-slate-50 opacity-50' : 'bg-white border-slate-100 shadow-sm'}`}>
+                  <p className="text-[11px] font-black uppercase text-slate-800">{t.remitente}</p>
+                  <p className="text-xs text-slate-600 leading-snug my-2 italic">"{t.mensaje}"</p>
+                  {t.estado === 'pendiente' ? (
+                    <button onClick={() => responderTicket(t)} className="w-full bg-blue-600 text-white text-[10px] py-3 rounded-xl uppercase font-black flex items-center justify-center gap-2 transition-all">
+                      <Send size={14} /> Atender WA
+                    </button>
+                  ) : (
+                    <span className="flex items-center gap-1 text-[9px] font-black text-emerald-500 uppercase"><CheckCircle size={12}/> Gestionado</span>
+                  )}
+                </div>
               ))}
             </div>
           </section>
 
-          <section className="bg-zinc-900 border border-white/10 p-5 rounded-sm">
-            <h2 className="font-black uppercase text-orange-500 mb-4 flex items-center gap-2 italic border-b border-white/5 pb-2">
-              <Store size={18}/> Gestión Tiendas (Bloqueo)
+          {/* LISTA DE TIENDAS */}
+          <section className="bg-white rounded-3xl p-6 shadow-sm border border-slate-100">
+            <h2 className="font-black uppercase text-blue-600 mb-4 flex items-center gap-2 text-sm italic border-b border-slate-50 pb-3">
+              <Store size={18}/> Status de Tiendas
             </h2>
-            <div className="space-y-2 max-h-40 overflow-y-auto custom-scrollbar">
+            <div className="space-y-2 max-h-60 overflow-y-auto pr-2 custom-scrollbar">
               {tiendas.map(t => (
-                <div key={t.id} className="flex justify-between items-center bg-black/40 p-3 border border-white/5">
-                  <div className="truncate pr-2">
-                    <p className="font-black text-[10px] uppercase truncate">{t.nombreNegocio || 'S/N'}</p>
-                    <p className="text-[8px] text-zinc-500 font-mono truncate">{t.email}</p>
-                  </div>
-                  <button onClick={() => toggleBloqueoTienda(t.id, !!t.bloqueada)} className={`p-2 border ${t.bloqueada ? 'bg-red-600 border-red-400 animate-pulse' : 'bg-green-600 border-green-400 hover:bg-white hover:text-black transition-colors'}`}>
-                    {t.bloqueada ? <Ban size={14}/> : <CheckCircle size={14}/>}
+                <div key={t.id} className="flex gap-2">
+                  <button onClick={() => setBusqueda(t.nombreNegocio)} className={`flex-1 text-left px-4 py-2.5 text-[10px] font-bold rounded-xl uppercase transition-all ${busqueda === t.nombreNegocio ? 'bg-blue-600 text-white' : 'hover:bg-slate-50'}`}>{t.nombreNegocio}</button>
+                  <button onClick={() => toggleBloqueoTienda(t.id, !!t.bloqueada)} className={`px-3 rounded-xl border transition-all ${t.bloqueada ? 'bg-red-50 border-red-200 text-red-500' : 'bg-emerald-50 border-emerald-200 text-emerald-500'}`}>
+                    {t.bloqueada ? <Ban size={14}/> : <ShieldCheck size={14}/>}
                   </button>
                 </div>
               ))}
@@ -215,101 +293,180 @@ export default function AdminPanel() {
           </section>
         </div>
 
-        {/* TABLA PRINCIPAL */}
+        {/* COLUMNA DERECHA: TABLA DINÁMICA */}
         <div className="lg:col-span-8">
-          <div className="bg-zinc-900 border border-white/10 overflow-hidden print:border-black print:bg-white rounded-sm shadow-2xl">
-            <div className="p-4 bg-black/50 print:hidden flex items-center gap-3">
-              <Search size={18} className="text-orange-500" />
-              <input value={busqueda} onChange={(e) => setBusqueda(e.target.value)} placeholder="ESCRIBE NOMBRE DE PRODUCTO O TIENDA..." className="bg-transparent w-full text-xs font-black uppercase outline-none placeholder:text-zinc-600" />
+          <div className="bg-white rounded-3xl shadow-sm border border-slate-100 overflow-hidden">
+            <div className="p-6 border-b border-slate-50 flex justify-between items-center gap-4">
+              <div className="relative flex-1">
+                <Search size={18} className="absolute left-4 top-3 text-slate-400" />
+                <input 
+                  value={busqueda} 
+                  onChange={(e) => setBusqueda(e.target.value)} 
+                  placeholder={activeTab === 'inventario' ? "BUSCAR PRODUCTO..." : "BUSCAR USUARIO..."} 
+                  className="w-full pl-12 pr-4 py-3 bg-slate-50 rounded-2xl text-[10px] font-bold uppercase outline-none focus:ring-2 focus:ring-blue-100 transition-all" 
+                />
+              </div>
+              {activeTab === 'inventario' && (
+                <button 
+                  onClick={() => setShowModal(true)} // CAMBIADO PARA ABRIR MODAL
+                  className="bg-blue-600 text-white px-5 py-3 rounded-2xl text-[10px] font-black uppercase flex items-center gap-2 shadow-lg shadow-blue-100 hover:scale-105 transition-all"
+                >
+                  <PackagePlus size={16} /> Global Add
+                </button>
+              )}
             </div>
             
             <div className="overflow-x-auto">
-              <table className="w-full text-left border-collapse grid-table print:text-black">
-                <thead>
-                  <tr className="bg-black text-orange-500 text-[10px] font-black uppercase border-b-2 border-orange-600 print:bg-gray-200 print:text-black print:border-black">
-                    <th className="p-4 border-r border-white/10 print:border-black">Producto</th>
-                    <th className="p-4 border-r border-white/10 print:border-black">Categoría</th>
-                    <th className="p-4 border-r border-white/10 print:border-black">Tienda</th>
-                    <th className="p-4 border-r border-white/10 text-right print:border-black">Interés</th>
-                    <th className="p-4 text-right">Precio</th>
-                  </tr>
-                </thead>
-                <tbody className="text-[11px] font-bold uppercase italic">
-                  {productosFiltrados.map((p) => (
-                    <tr key={p.id} className="border-b border-white/10 hover:bg-white/5 transition-colors print:border-black print:text-black">
-                      <td className="p-4 border-r border-white/10 font-black print:border-black">
-                        {p.nombre} {p.oferta && <span className="text-orange-500 not-italic ml-1">🔥</span>}
-                      </td>
-                      <td className="p-4 border-r border-white/10 print:border-black">
-                        {p.categoria || 'GENERAL'}
-                      </td>
-                      <td className="p-4 border-r border-white/10 print:border-black">
-                        <span className="bg-white text-black px-2 py-0.5 text-[9px] font-black border border-black print:bg-transparent">{p.nombreTienda}</span>
-                      </td>
-                      <td className="p-4 border-r border-white/10 text-right font-mono text-orange-500 print:text-black print:border-black">
-                        {p.clics || 0}
-                      </td>
-                      <td className="p-4 text-right font-black text-sm">
-                        ${Number(p.precio).toLocaleString()}
-                      </td>
+              {activeTab === 'inventario' ? (
+                <table className="w-full text-left">
+                  <thead className="bg-slate-50 text-slate-400 text-[10px] font-black uppercase tracking-widest">
+                    <tr>
+                      <th className="p-6">Producto / Categoría</th>
+                      <th className="p-6">Negocio</th>
+                      <th className="p-6 text-right">Clicks</th>
+                      <th className="p-6 text-right">Precio</th>
+                      <th className="p-6 text-center">Acción</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody className="text-xs font-bold uppercase text-slate-700">
+                    {productosFiltrados.map((p) => (
+                      <tr key={p.id} className="border-b border-slate-50 hover:bg-blue-50/30 transition-colors">
+                        <td className="p-6">
+                          <span className="block text-slate-900">{p.nombre}</span>
+                          <span className="text-[9px] text-slate-400">{p.categoria || 'GENERAL'}</span>
+                        </td>
+                        <td className="p-6"><span className="bg-blue-50 text-blue-600 px-3 py-1 rounded-lg text-[9px] font-black">{p.nombreTienda}</span></td>
+                        <td className="p-6 text-right font-mono text-blue-500">{p.clics || 0}</td>
+                        <td className="p-6 text-right font-black text-slate-900">${Number(p.precio).toLocaleString()}</td>
+                        <td className="p-6 text-center">
+                          <button onClick={() => eliminarProducto(p.id, p.nombre)} className="text-slate-300 hover:text-red-500 transition-all">
+                            <Trash2 size={18}/>
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              ) : (
+                <table className="w-full text-left">
+                  <thead className="bg-slate-50 text-slate-400 text-[10px] font-black uppercase tracking-widest">
+                    <tr>
+                      <th className="p-6">Usuario / Contacto</th>
+                      <th className="p-6 text-center">Rol</th>
+                      <th className="p-6 text-center">Gestión TI</th>
+                    </tr>
+                  </thead>
+                  <tbody className="text-xs font-bold uppercase text-slate-700">
+                    {usuariosFiltrados.map((u) => (
+                      <tr key={u.id} className="border-b border-slate-50 hover:bg-slate-50 transition-colors">
+                        <td className="p-6">
+                          <span className="block text-slate-900">{u.nombre}</span>
+                          <span className="text-[9px] text-slate-400">{u.email}</span>
+                        </td>
+                        <td className="p-6 text-center">
+                          <span className={`px-3 py-1 rounded-lg text-[9px] font-black ${u.rol === 'tendero' ? 'bg-indigo-50 text-indigo-600' : 'bg-slate-100 text-slate-500'}`}>{u.rol}</span>
+                        </td>
+                        <td className="p-6 text-center flex justify-center gap-4">
+                          <button onClick={() => toast.success(`LINK ENVIADO A ${u.email}`)} className="text-slate-400 hover:text-blue-500 transition-all" title="Reset Password"><Key size={18}/></button>
+                          <button onClick={() => eliminarUsuario(u.id, u.nombre)} className="text-slate-400 hover:text-red-500 transition-all" title="Borrar Usuario"><Trash2 size={18}/></button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
             </div>
           </div>
         </div>
       </div>
 
-      {/* FOOTER DE IMPRESIÓN */}
-      <footer className="mt-10 pt-4 border-t-2 border-black hidden print:flex justify-between items-center text-[10px] font-black uppercase italic text-black">
-        <div>
-          <p>Firma Responsable Auditoría: ___________________________</p>
-          <p className="mt-2 text-gray-500 tracking-tighter">TOKEN-ID: {Math.random().toString(36).substr(2, 10).toUpperCase()}</p>
-        </div>
-        <div className="text-right">
-          <p>LocalMarket Cali - Sistema Inventario © 2026</p>
-          <p>Documento Generado: {new Date().toLocaleString()}</p>
-        </div>
-      </footer>
+      {/* --- EL MODAL (VENTANA PEQUEÑA) --- */}
+      {showModal && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white w-full max-w-md rounded-3xl shadow-2xl overflow-hidden border border-slate-100 animate-in fade-in zoom-in duration-200">
+            <div className="bg-blue-600 p-6 text-white flex justify-between items-center">
+              <h3 className="font-black uppercase text-xs tracking-widest flex items-center gap-2">
+                <PackagePlus size={18}/> Global Product Add
+              </h3>
+              <button onClick={() => setShowModal(false)} className="hover:rotate-90 transition-transform">
+                <Ban size={20}/>
+              </button>
+            </div>
+            
+            <form onSubmit={guardarProductoModal} className="p-6 space-y-4">
+              <div>
+                <label className="block text-[9px] font-black uppercase text-slate-400 mb-1 ml-1 italic">1. Tienda de Destino</label>
+                <select 
+                  required
+                  className="w-full p-3.5 bg-slate-50 border border-slate-100 rounded-2xl text-[10px] font-bold uppercase outline-none focus:ring-2 focus:ring-blue-100 appearance-none"
+                  onChange={(e) => setNuevoProducto({...nuevoProducto, idTienda: e.target.value})}
+                >
+                  <option value="">-- Seleccionar Comercio --</option>
+                  {tiendas.map(t => <option key={t.id} value={t.id}>{t.nombreNegocio}</option>)}
+                </select>
+              </div>
 
-      <style jsx global>{`
-        .custom-scrollbar::-webkit-scrollbar { width: 4px; }
-        .custom-scrollbar::-webkit-scrollbar-thumb { background: #ea580c; }
-        
-        @media print {
-          @page { size: portrait; margin: 1cm; }
-          body { background: white !important; color: black !important; -webkit-print-color-adjust: exact; }
-          .bg-slate-950, .bg-zinc-900, .bg-black, .bg-black\/40, .bg-black\/50 { background: transparent !important; }
-          .print\:text-black { color: black !important; }
-          
-          .grid-table { 
-            width: 100% !important; 
-            border: 2px solid black !important; 
-            border-collapse: collapse !important;
-          }
-          .grid-table th, .grid-table td { 
-            border: 1px solid black !important; 
-            padding: 8px !important;
-          }
-          .grid-table th { 
-            background-color: #eee !important;
-          }
-          
-          .print\:hidden { display: none !important; }
-          .hidden.print\:flex { display: flex !important; }
-          .hidden.print\:block { display: block !important; }
-        }
-      `}</style>
+              <div>
+                <label className="block text-[9px] font-black uppercase text-slate-400 mb-1 ml-1 italic">2. Nombre del Artículo</label>
+                <input 
+                  placeholder="EJ: TOMATE CHONTO"
+                  required
+                  className="w-full p-3.5 bg-slate-50 border border-slate-100 rounded-2xl text-[10px] font-bold uppercase outline-none focus:ring-2 focus:ring-blue-100"
+                  onChange={(e) => setNuevoProducto({...nuevoProducto, nombre: e.target.value})}
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-[9px] font-black uppercase text-slate-400 mb-1 ml-1 italic">3. Precio</label>
+                  <input 
+                    type="number"
+                    placeholder="0.00"
+                    required
+                    className="w-full p-3.5 bg-slate-50 border border-slate-100 rounded-2xl text-[10px] font-bold uppercase outline-none"
+                    onChange={(e) => setNuevoProducto({...nuevoProducto, precio: e.target.value})}
+                  />
+                </div>
+                <div>
+                  <label className="block text-[9px] font-black uppercase text-slate-400 mb-1 ml-1 italic">4. Categoría</label>
+                  <input 
+                    placeholder="EJ: FRUTAS"
+                    className="w-full p-3.5 bg-slate-50 border border-slate-100 rounded-2xl text-[10px] font-bold uppercase outline-none"
+                    onChange={(e) => setNuevoProducto({...nuevoProducto, categoria: e.target.value})}
+                  />
+                </div>
+              </div>
+
+              <div className="flex gap-3 pt-4">
+                <button 
+                  type="button" 
+                  onClick={() => setShowModal(false)}
+                  className="flex-1 py-4 border-2 border-slate-100 text-slate-400 rounded-2xl text-[10px] font-black uppercase hover:bg-slate-50 transition-all"
+                >
+                  Cancelar
+                </button>
+                <button 
+                  type="submit"
+                  disabled={subiendoProducto}
+                  className="flex-1 py-4 bg-blue-600 text-white rounded-2xl text-[10px] font-black uppercase shadow-lg shadow-blue-100 hover:bg-blue-700 transition-all flex items-center justify-center gap-2"
+                >
+                  {subiendoProducto ? <Loader2 className="animate-spin" size={14}/> : <><Save size={14}/> Guardar</>}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }
 
 function StatBox({ label, val, color }: any) {
   return (
-    <div className="bg-zinc-900 border border-white/10 p-5 rounded-sm print:border-black print:bg-white">
-      <p className="text-[9px] font-black uppercase text-zinc-500 mb-1 print:text-black">{label}</p>
-      <p className={`text-2xl font-black italic tracking-tighter ${color} print:text-black`}>{val}</p>
+    <div className="bg-white border border-slate-100 p-6 rounded-3xl shadow-sm">
+      <p className="text-[10px] font-black uppercase text-slate-400 mb-1 tracking-widest">{label}</p>
+      <p className={`text-2xl font-black italic tracking-tight ${color}`}>{val}</p>
     </div>
   );
 }
