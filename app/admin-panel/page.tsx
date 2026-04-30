@@ -12,6 +12,7 @@ import {
   Send, Users, Key, PackagePlus, Save, Edit3, History,
   Eye, RefreshCw, TrendingUp, AlertTriangle, Phone
 } from "lucide-react";
+import { where, getDocs, writeBatch } from "firebase/firestore";
 
 const CATEGORIAS_OPTIMIZADAS = [
   "GRANOS Y ESTANTERÍA",
@@ -61,6 +62,7 @@ export default function AdminPanel() {
   
   // NUEVO: Estado para editar WhatsApp directamente en la tabla
   const [editWhastapp, setEditWhatsapp] = useState({ id: "", num: "" });
+  const [editTiendaWa, setEditTiendaWa] = useState({ id: "", num: "" });
 
   const [nuevoProducto, setNuevoProducto] = useState({
     nombre: "",
@@ -87,14 +89,45 @@ export default function AdminPanel() {
     } catch (e) { console.error("Error log:", e); }
   };
 
-  // --- ACCIÓN NUEVA: ACTUALIZAR WHATSAPP DESDE TABLA ---
+// --- AÑADIDO: ACTUALIZAR WHATSAPP INDIVIDUAL (PRODUCTO) ---
   const corregirWhatsapp = async (id: string, nombreProd: string) => {
     try {
       await updateDoc(doc(db, "productos", id), { whatsapp: editWhastapp.num });
       await registrarLog("CORRECCIÓN", `WhatsApp actualizado en ${nombreProd}: ${editWhastapp.num}`);
       toast.success("NÚMERO ACTUALIZADO");
       setEditWhatsapp({ id: "", num: "" });
-    } catch (e) { toast.error("ERROR AL ACTUALIZAR"); }
+    } catch (e) { 
+      toast.error("ERROR AL ACTUALIZAR"); 
+    }
+  };
+
+  // --- AÑADIDO: ACTUALIZAR WHATSAPP TIENDA Y PRODUCTOS EN CASCADA ---
+  const actualizarWaTienda = async (id: string, nombreTienda: string) => {
+    if (!editTiendaWa.num) return;
+    try {
+      const nuevoNumero = editTiendaWa.num;
+      const batch = writeBatch(db);
+
+      // Actualiza la tienda
+      const tiendaRef = doc(db, "tiendas", id);
+      batch.update(tiendaRef, { whatsapp: nuevoNumero });
+
+      // Busca productos de esa tienda para sincronizar
+      const q = query(collection(db, "productos"), where("idTienda", "==", id));
+      const querySnapshot = await getDocs(q);
+
+      querySnapshot.forEach((productoDoc: any) => {
+        batch.update(productoDoc.ref, { whatsapp: nuevoNumero });
+      });
+
+      await batch.commit();
+      await registrarLog("CONFIGURACIÓN", `Sincronización total: ${nombreTienda}`);
+      toast.success("TIENDA Y PRODUCTOS ACTUALIZADOS");
+      setEditTiendaWa({ id: "", num: "" });
+    } catch (e) { 
+      console.error(e);
+      toast.error("ERROR EN SINCRONIZACIÓN"); 
+    }
   };
 
   // --- FILTRADOS Y STATS (MANTENIDOS) ---
@@ -256,7 +289,7 @@ export default function AdminPanel() {
     }
   };
 
-  if (loading) return (
+if (loading) return (
     <div className="min-h-screen flex flex-col items-center justify-center bg-slate-50 text-blue-600 font-bold">
       <Loader2 className="animate-spin mb-4" size={40} />
       <p className="uppercase tracking-widest text-[10px]">Sincronizando Consola Maestra...</p>
@@ -352,17 +385,48 @@ export default function AdminPanel() {
             </div>
           </section>
 
+          {/* SECCIÓN ACTUALIZADA: STATUS DE COMERCIOS CON EDICIÓN DE WHATSAPP */}
           <section className="bg-white rounded-3xl p-6 shadow-sm border border-slate-100">
             <h2 className="font-black uppercase text-blue-600 mb-4 flex items-center gap-2 text-sm italic border-b border-slate-50 pb-3">
               <Store size={18}/> Status de Comercios
             </h2>
-            <div className="space-y-2 max-h-60 overflow-y-auto pr-2 custom-scrollbar">
+            <div className="space-y-4 max-h-80 overflow-y-auto pr-2 custom-scrollbar">
               {tiendas.map(t => (
-                <div key={t.id} className="flex gap-2">
-                  <button onClick={() => setBusqueda(t.nombreNegocio)} className={`flex-1 text-left px-4 py-2.5 text-[10px] font-bold rounded-xl uppercase transition-all ${busqueda === t.nombreNegocio ? 'bg-blue-600 text-white' : 'hover:bg-slate-50 text-slate-900'}`}>{t.nombreNegocio}</button>
-                  <button onClick={() => toggleBloqueoTienda(t.id, !!t.bloqueada, t.nombreNegocio)} className={`px-3 rounded-xl border transition-all ${t.bloqueada ? 'bg-red-50 border-red-200 text-red-600' : 'bg-emerald-50 border-emerald-200 text-emerald-600'}`}>
-                    {t.bloqueada ? <Ban size={14}/> : <ShieldCheck size={14}/>}
-                  </button>
+                <div key={t.id} className="bg-slate-50 p-3 rounded-2xl border border-slate-100 shadow-sm">
+                  <div className="flex justify-between items-center mb-2">
+                    <button 
+                      onClick={() => setBusqueda(t.nombreNegocio)} 
+                      className={`text-[10px] font-black uppercase truncate max-w-[150px] transition-colors ${busqueda === t.nombreNegocio ? 'text-blue-600' : 'text-slate-900'}`}
+                    >
+                      {t.nombreNegocio}
+                    </button>
+                    <button 
+                      onClick={() => toggleBloqueoTienda(t.id, !!t.bloqueada, t.nombreNegocio)} 
+                      className={`p-1.5 rounded-lg border transition-all ${t.bloqueada ? 'bg-red-50 border-red-200 text-red-600' : 'bg-emerald-50 border-emerald-200 text-emerald-600'}`}
+                    >
+                      {t.bloqueada ? <Ban size={12}/> : <ShieldCheck size={12}/>}
+                    </button>
+                  </div>
+
+                  <div className="flex items-center gap-2 bg-white p-2 rounded-xl border border-slate-100">
+                    <Phone size={12} className="text-slate-400" />
+                    {editTiendaWa.id === t.id ? (
+                      <input 
+                        className="flex-1 text-[10px] font-bold outline-none text-blue-600 bg-transparent"
+                        value={editTiendaWa.num}
+                        onChange={(e) => setEditTiendaWa({...editTiendaWa, num: e.target.value})}
+                        onBlur={() => actualizarWaTienda(t.id, t.nombreNegocio)}
+                        autoFocus
+                      />
+                    ) : (
+                      <span 
+                        onClick={() => setEditTiendaWa({id: t.id, num: t.whatsapp || ""})} 
+                        className="flex-1 text-[10px] font-bold text-slate-500 cursor-pointer hover:text-blue-600 flex justify-between items-center"
+                      >
+                        {t.whatsapp || "SIN NÚMERO"} ✏️
+                      </span>
+                    )}
+                  </div>
                 </div>
               ))}
             </div>
@@ -430,7 +494,6 @@ export default function AdminPanel() {
                           </td>
                           <td className="p-6 text-center">
                             <span className="block bg-blue-50 text-blue-700 px-3 py-1 rounded-lg text-[9px] font-black mb-1">{p.nombreTienda}</span>
-                            {/* NUEVO: Edición rápida de WhatsApp */}
                             <div className="flex items-center justify-center gap-1">
                                 <Phone size={10} className="text-slate-400" />
                                 {editWhastapp.id === p.id ? (
@@ -463,7 +526,6 @@ export default function AdminPanel() {
                         </tr>
                       ))}
 
-                      {/* TABS DE USUARIOS Y LOGS (MANTENIDOS) */}
                       {activeTab === 'usuarios' && usuariosFiltrados.map((u) => (
                         <tr key={u.id} className="border-b border-slate-50 hover:bg-slate-50 transition-colors">
                           <td className="p-6">
@@ -504,7 +566,6 @@ export default function AdminPanel() {
                 </div>
               </>
             ) : (
-              /* TAB DE MÉTRICAS */
               <div className="p-8 space-y-8">
                 <div className="border-b border-slate-100 pb-4">
                   <h3 className="font-black uppercase text-blue-600 text-lg italic">Inteligencia de Negocio</h3>
@@ -538,7 +599,7 @@ export default function AdminPanel() {
         </div>
       </div>
 
-      {/* MODAL (CON CAMPO WHATSAPP) */}
+      {/* MODAL */}
       {showModal && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-white w-full max-w-md rounded-3xl shadow-2xl overflow-hidden animate-in fade-in zoom-in duration-200">
@@ -578,7 +639,6 @@ export default function AdminPanel() {
                 </div>
               </div>
 
-              {/* CAMPO WHATSAPP EN MODAL */}
               <div>
                 <label className="block text-[9px] font-black uppercase text-slate-500 mb-1 italic">WhatsApp de contacto (Personalizado)</label>
                 <input value={nuevoProducto.whatsapp} placeholder="Ej: 3001234567" className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl text-[10px] font-bold uppercase outline-none" onChange={(e) => setNuevoProducto({...nuevoProducto, whatsapp: e.target.value})} />
@@ -603,6 +663,6 @@ function StatBox({ label, val, color }: any) {
     <div className="bg-white border border-slate-100 p-6 rounded-3xl shadow-sm group">
       <p className="text-[10px] font-black uppercase text-slate-400 mb-1 tracking-widest">{label}</p>
       <p className={`text-2xl font-black italic tracking-tight ${color}`}>{val}</p>
-    </div>
-  );
-}
+    </div> 
+    );
+}  
