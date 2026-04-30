@@ -13,6 +13,7 @@ export default function LoginPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [nombreNegocio, setNombreNegocio] = useState("");
+  const [whatsapp, setWhatsapp] = useState("");
   
   const [error, setError] = useState("");
   const [isRegistering, setIsRegistering] = useState(false);
@@ -57,6 +58,7 @@ export default function LoginPage() {
         await setDoc(doc(db, "tiendas", user.uid), {
           nombreNegocio: nombreNegocio,
           email: email,
+          whatsapp: whatsapp,
           fechaRegistro: new Date().toISOString(),
           rol: "tendero",
           estado: "activo" 
@@ -154,6 +156,21 @@ export default function LoginPage() {
               required={isRegistering} 
             />
           </div>
+        )}
+
+        {isRegistering && (
+          <div className="mb-4">
+            <label className="block text-[10px] font-black uppercase mb-1 flex items-center gap-1 italic">
+              <span className="text-green-600">●</span> WhatsApp de Contacto
+            </label>
+            <input 
+            type="tel" 
+            placeholder="Ej: 315 123 4567" 
+            onChange={(e) => setWhatsapp(e.target.value)} 
+            className="w-full p-3 border-2 border-black rounded-none outline-none focus:bg-orange-50 transition-colors font-bold" 
+            required={isRegistering} 
+          />
+        </div>
         )}
 
         <div className="mb-4">
